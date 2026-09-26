@@ -174,6 +174,78 @@ html, body{
 }
 .dot.off{ background: var(--red); box-shadow: 0 0 6px var(--red); }
 
+/* ---------- Tocando agora (Last.fm) ----------
+   Fica logo abaixo do relógio, no mesmo espaço vazio da coluna.
+   Some sozinho se a API falhar ou não tiver dado — não deixa
+   buraco vazio nem quebra o layout. */
+
+#music-node{
+  top: 20vh;
+  left: 76vw;
+  width: min(230px, 16vw);
+}
+
+#music-widget{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#music-thumb{
+  width: 36px;
+  height: 36px;
+  border-radius: 2px;
+  object-fit: cover;
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+
+.music-text{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+#music-track{
+  font-size: var(--fs-label);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#music-artist{
+  font-size: var(--fs-small);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* quando NÃO é "tocando agora" (é só a última música ouvida),
+   deixa tudo um pouco mais apagado — indica que é histórico */
+#music-widget:not(.is-live) #music-thumb,
+#music-widget:not(.is-live) #music-track,
+#music-widget:not(.is-live) #music-artist{
+  opacity: 0.55;
+}
+
+#music-live-dot{
+  align-self: flex-start;
+  margin-top: 4px;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse{
+  0%, 100%{ opacity: 1; }
+  50%{ opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce){
+  #music-live-dot{ animation: none; }
+}
+
 /* ---------- Pesquisa ----------
    Posicionada na altura do olho da personagem (~37vh nesta imagem):
    ela está olhando na direção da busca. Se trocar de wallpaper,
@@ -295,12 +367,12 @@ html, body{
 /* ---------- Responsivo ---------- */
 
 @media (max-width: 1366px){
-  #clock-node, #search-node, .shortcut, #weather-node{ left: 72vw; }
+  #clock-node, #search-node, .shortcut, #weather-node, #music-node{ left: 72vw; }
   #search-node{ width: min(260px, 24vw); }
 }
 
 @media (max-width: 1280px){
-  #clock-node, #search-node, .shortcut, #weather-node{ left: 68vw; }
+  #clock-node, #search-node, .shortcut, #weather-node, #music-node{ left: 68vw; }
   #search-node{ width: min(230px, 28vw); }
   :root{ --fs-clock: clamp(20px, 3.6vw, 36px); }
 }
@@ -328,6 +400,18 @@ html, body{
     <div class="node" id="clock-node">
       <div id="clock">00:00</div>
       <div id="date">--/--/----</div>
+    </div>
+
+    <!-- Tocando agora (Last.fm) -->
+    <div class="node" id="music-node">
+      <div id="music-widget" hidden>
+        <img id="music-thumb" alt="" hidden>
+        <div class="music-text">
+          <div id="music-track"></div>
+          <div id="music-artist"></div>
+        </div>
+        <span class="dot" id="music-live-dot" hidden aria-hidden="true"></span>
+      </div>
     </div>
 
     <!-- Status -->
@@ -425,6 +509,15 @@ const WEATHER_CONFIG = {
 // Mecanismo de busca. Use "%s" onde a pesquisa deve entrar.
 const SEARCH_ENGINE = "https://www.bing.com/search?q=%s";
 
+// Widget "tocando agora" via Last.fm (lê o que você ouve no Spotify).
+// A api_key do Last.fm é pública por natureza — ela só dá acesso de
+// LEITURA a dados públicos, não é como uma senha. Não tem problema
+// ela ficar visível aqui no código.
+const LASTFM_CONFIG = {
+  apiKey: "6c076a607286d2b53fdc1da4cd6d2b42",
+  username: "Angels5_Otavio"
+};
+
 /* ================= FIM DA CONFIGURAÇÃO ================= */
 /* Não é necessário editar nada abaixo desta linha. */
 
@@ -434,6 +527,8 @@ const SEARCH_ENGINE = "https://www.bing.com/search?q=%s";
   startClock();
   setupSearch();
   loadWeather();
+  loadNowPlaying();
+  setInterval(loadNowPlaying, 20000); // atualiza a cada 20s
   setupSpatialNavigation();
   setupGamepad();
   markOnlineStatus();
@@ -558,6 +653,66 @@ async function fetchCurrentTemp(lat, lon){
   const data = await res.json();
   if (!data.current || typeof data.current.temperature_2m !== "number") return null;
   return data.current.temperature_2m;
+}
+
+
+/* ---------------- "Tocando agora" via Last.fm ---------------- */
+
+async function loadNowPlaying(){
+  const widget = document.getElementById("music-widget");
+  const { apiKey, username } = LASTFM_CONFIG;
+
+  if (!apiKey || !username){
+    widget.hidden = true;
+    return;
+  }
+
+  try{
+    const url = `https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user=${encodeURIComponent(username)}&api_key=${apiKey}&format=json&limit=1`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("resposta não-ok");
+
+    const data = await res.json();
+    const track = data.recenttrack || data.recenttracks?.track?.[0];
+    if (!track) throw new Error("sem faixa recente");
+
+    const isPlayingNow = track["@attr"] && track["@attr"].nowplaying === "true";
+    const title = track.name || "";
+    const artist = (track.artist && (track.artist["#text"] || track.artist.name)) || "";
+    const images = track.image || [];
+    const thumbUrl = (images.find(i => i.size === "medium") || images[images.length - 1] || {})["#text"];
+
+    renderNowPlaying({ title, artist, thumbUrl, isPlayingNow });
+  }catch(err){
+    console.warn("[dashboard] Last.fm indisponível:", err.message);
+    widget.hidden = true; // não travar a dashboard — some silenciosamente
+  }
+}
+
+function renderNowPlaying({ title, artist, thumbUrl, isPlayingNow }){
+  const widget = document.getElementById("music-widget");
+  const thumb = document.getElementById("music-thumb");
+  const trackEl = document.getElementById("music-track");
+  const artistEl = document.getElementById("music-artist");
+  const dot = document.getElementById("music-live-dot");
+
+  if (!title){
+    widget.hidden = true;
+    return;
+  }
+
+  trackEl.textContent = title;
+  artistEl.textContent = artist;
+  if (thumbUrl){
+    thumb.src = thumbUrl;
+    thumb.hidden = false;
+  }else{
+    thumb.hidden = true;
+  }
+
+  widget.classList.toggle("is-live", !!isPlayingNow);
+  dot.hidden = !isPlayingNow;
+  widget.hidden = false;
 }
 
 
